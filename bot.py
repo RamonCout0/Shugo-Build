@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import gzip
 import io
+import json
 import logging
 import os
 import shutil
@@ -49,22 +50,64 @@ def db_path() -> str:
 SEED_GZ = Path(__file__).resolve().parent / "seed" / "aion2-seed.db.gz"
 
 
+def _kv(con: sqlite3.Connection, k: str, default=0.0):
+    try:
+        row = con.execute("SELECT v FROM kv WHERE k=?", (k,)).fetchone()
+        return json.loads(row[0]) if row else default
+    except sqlite3.Error:
+        return default
+
+
 def restore_seed(p: Path) -> None:
-    """Se o banco está vazio (primeiro deploy / volume novo), começa do seed que vem no repositório."""
+    """Usa o seed do repositório quando:
+    - o banco está vazio (primeiro deploy / volume novo), ou
+    - o seed é uma versão mais nova (ex.: completado com tabuleiros/gemas) e o bot não fez coleta própria depois dele.
+    Ao trocar, mantém o canal do /canal e os tops do Abismo cadastrados."""
     if not SEED_GZ.exists():
         return
+    tmp = p.with_suffix(".seed-tmp")
+    with gzip.open(SEED_GZ, "rb") as src, open(tmp, "wb") as dst:
+        shutil.copyfileobj(src, dst)
+    seed = sqlite3.connect(tmp)
+    seed_ver, seed_cycle = _kv(seed, "seed_version"), _kv(seed, "last_full_cycle")
+    seed.close()
+
+    empty, keep_reason = True, ""
     if p.exists():
         try:
             con = sqlite3.connect(p)
-            n = con.execute("SELECT COUNT(*) FROM meta_snapshots").fetchone()[0]
+            empty = not con.execute("SELECT COUNT(*) FROM meta_snapshots").fetchone()[0]
+            db_ver, db_cycle = _kv(con, "seed_version"), _kv(con, "last_full_cycle")
             con.close()
-            if n:
-                return  # já tem dados próprios: não sobrescreve
+            if not empty and seed_ver <= db_ver:
+                keep_reason = "o seed não é mais novo"
+            elif not empty and (db_cycle or 0) > (seed_cycle or 0):
+                keep_reason = "o bot já coletou dados mais novos que o seed"
         except sqlite3.Error:
-            pass  # tabela ainda não existe = banco vazio
-    with gzip.open(SEED_GZ, "rb") as src, open(p, "wb") as dst:
-        shutil.copyfileobj(src, dst)
-    log.info("Nyerk! Banco pré-carregado restaurado de %s — o meta já está disponível, nyang~", SEED_GZ.name)
+            empty = True  # tabelas ainda não existem
+    if keep_reason:
+        tmp.unlink(missing_ok=True)
+        log.info("banco atual mantido (%s)", keep_reason)
+        return
+
+    if not empty:  # leva junto o que é configuração do servidor
+        new = sqlite3.connect(tmp)
+        new.execute("ATTACH DATABASE ? AS old", (str(p),))
+        try:
+            new.execute("INSERT OR REPLACE INTO channels SELECT * FROM old.channels")
+            new.execute("INSERT OR IGNORE INTO characters SELECT * FROM old.characters WHERE seeded=1")
+            new.execute("UPDATE characters SET seeded=1 WHERE (region, char_id) IN "
+                        "(SELECT region, char_id FROM old.characters WHERE seeded=1)")
+            new.execute("INSERT OR IGNORE INTO builds SELECT b.* FROM old.builds b JOIN old.characters c "
+                        "ON b.region=c.region AND b.char_id=c.char_id WHERE c.seeded=1")
+            new.commit()
+        except sqlite3.Error as e:
+            log.warning("não consegui copiar canal/tops do Abismo do banco antigo: %s", e)
+        new.execute("DETACH DATABASE old")
+        new.close()
+    os.replace(tmp, p)
+    log.info("Nyerk! Banco pré-carregado %s de %s — o meta já está disponível, nyang~",
+             "restaurado" if empty else "atualizado (versão nova do seed)", SEED_GZ.name)
 
 TOKEN = os.environ.get("DISCORD_TOKEN", "")
 GUILD_ID = int(os.getenv("GUILD_ID", "0") or 0)  # opcional: sincroniza comandos na hora nesse servidor
@@ -112,6 +155,16 @@ class MetaBot(commands.Bot):
         """Só confere a agenda; a coleta em si roda domingo de madrugada (quinzenal por padrão)."""
         if self.collector.running.locked():
             return
+        if not getattr(self, "_details_checked", False):
+            # uma vez por boot: completa tabuleiros/gemas dos top 3 que faltarem (banco antigo, sem precisar de seed)
+            self._details_checked = True
+            if self.store.has_meta() and self.collector.needs_details(REGIONS):
+                log.info("Nyerk! Completando tabuleiros do Daevanion e gemas dos tops em segundo plano, nyang~")
+                try:
+                    await self.collector.complete_details(REGIONS)
+                except Exception:
+                    log.exception("completar detalhes falhou")
+                return
         never = not self.store.has_meta()  # banco vazio e sem seed: coleta uma vez pra não ficar sem dados
         if not never and not schedule.is_due(self.collector.last_full_cycle()):
             return

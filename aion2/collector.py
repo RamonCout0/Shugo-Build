@@ -206,6 +206,17 @@ class Collector:
             log.info("[%s] meta publicado", scope)
         return changes
 
+    def needs_details(self, regions: list[str]) -> bool:
+        """Algum top N (por classe/modo) ainda sem tabuleiro nó a nó ou gemas?"""
+        for region in regions:
+            cap = self.store.get(f"cap:{region}", 0)
+            for cls in self.store.classes([region]):
+                for mode in ("pve", "pvp"):
+                    for r in self.store.top([region], cls, mode, self.s.detail_top, cap - 1):
+                        if not has_full_detail(self.store.build(region, r["char_id"])):
+                            return True
+        return False
+
     async def complete_details(self, regions: list[str]) -> None:
         """Só baixa tabuleiros nó a nó + gemas dos top N que ainda não têm, e republica o meta."""
         async with self.running:

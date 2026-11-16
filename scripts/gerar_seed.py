@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import gzip
+import json
 import logging
 import shutil
 import sqlite3
@@ -62,6 +63,8 @@ async def main(ciclos: int, regioes: list[str], intervalo: float, completar: boo
     db.execute("""DELETE FROM meta_snapshots WHERE rowid NOT IN (
                     SELECT MAX(rowid) FROM meta_snapshots GROUP BY scope, class, mode)""")
     db.execute("DELETE FROM channels")  # config do Discord não vai no seed
+    # versão do seed: o bot troca o banco do volume quando recebe um seed mais novo (ver restore_seed)
+    db.execute("INSERT OR REPLACE INTO kv VALUES ('seed_version', ?)", (json.dumps(time.time()),))
     db.commit()
     db.execute("VACUUM")
     db.close()
