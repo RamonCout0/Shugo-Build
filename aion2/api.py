@@ -123,6 +123,13 @@ class Aion2Api:
         return await self._get(f"{SITE_BASE}/api/character/daevanion/detail",
                                {**extra, "characterId": char_id, "serverId": server_id, "boardId": board_id})
 
+    async def item_detail(self, region: str, char_id: str, server_id: int, item: dict) -> dict:
+        """Detalhe de um item equipado: Soul Binding (subStats/subSkills), Manastones e Theostone."""
+        _, extra = self._svc(region)
+        return await self._get(f"{SITE_BASE}/api/character/equipment/item", {
+            **extra, "id": item["id"], "enchantLevel": item.get("enchantLevel", 0),
+            "characterId": char_id, "serverId": server_id, "slotPos": item["slotPos"]})
+
     async def global_servers(self, region: str = "naw") -> list[dict]:
         data = await self._get(f"{SITE_BASE}/en-us/api/gameinfo/servers", {"lang": "en-US", "region": region})
         return data.get("serverList", [])

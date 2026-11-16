@@ -26,6 +26,8 @@ SLOT_PT = {
 }
 GRADE_ICON = {"Mythic": "🟥", "Legend": "🟧", "Legendary": "🟧", "Unique": "🟨", "Epic": "🟪", "Rare": "🟦",
               "Common": "⬜"}
+DAEV_FILE = "daevanion.png"
+CAT_PT = {"Passive": "(passiva)", "Active": "(ativa)", "Dp": "(estigma)"}
 MODE_PT = {"pve": "PvE", "pvp": "PvP"}
 
 
@@ -95,14 +97,23 @@ def gear_embed(meta: dict) -> discord.Embed:
                         f"{'`★' + format(i['exceed'], 'g') + '`' if i['exceed'] else ''} — {i['pct']}%"
                         for i in items[:lim])
         e.add_field(name=SLOT_PT.get(grp, grp), value=_clip(val), inline=grp != "Arcana")
-        if len(e.fields) >= 24:
+        if len(e.fields) >= 22:
             break
+    ni = meta.get("items_detailed_n") or 0
+    if meta.get("stones"):
+        e.add_field(name=f"💠 Manastones mais usadas (top {ni})", value=_clip("\n".join(
+            f"**{st['name']}** — {st['per_char']:g} por personagem"
+            + (f" • média +{st['avg']:g}" if st["avg"] is not None else "")
+            for st in meta["stones"])), inline=False)
+    if meta.get("theostones"):
+        e.add_field(name="🔥 Theostone (arma)", value=_clip("\n".join(
+            f"`{g['pct']:>3}%` **{g['name']}** — {g['desc']}" for g in meta["theostones"])), inline=False)
     return e
 
 
 def skills_embed(meta: dict) -> discord.Embed:
     e = _base(meta, "**Skills** — `%` dos tops que usam • nível médio")
-    names = {"Active": "⚔️ Ativas (na barra)", "Dp": "💠 Skills DP", "Passive": "🔹 Passivas"}
+    names = {"Active": "⚔️ Ativas (na barra)", "Dp": "🔮 Estigmas", "Passive": "🔹 Passivas"}
     for cat in ("Active", "Dp", "Passive"):
         sk = meta["skills"].get(cat)
         if sk:
@@ -113,6 +124,10 @@ def skills_embed(meta: dict) -> discord.Embed:
     if top_sk:
         e.add_field(name=f"👑 Barra do top 1 ({tb['profile']['characterName']})", value=_clip(", ".join(
             f"{s['name']} {s['lv']}" for s in top_sk)), inline=False)
+    if meta.get("gems"):
+        e.add_field(name=f"💎 Gemas de habilidade nos equipamentos (Soul Binding) — média dos top {meta['items_detailed_n']}",
+                    value=_clip("\n".join(f"**{g['name']}** +{g['avg']:g} {CAT_PT.get(g['cat'], '')}"
+                                          for g in meta["gems"])), inline=False)
     return e
 
 
@@ -120,7 +135,9 @@ def daevanion_embed(meta: dict) -> discord.Embed:
     d = meta["daevanion"]
     e = _base(meta, f"**Daevanion** — progresso médio dos tabuleiros e efeitos mais escolhidos "
                     f"(detalhado nos top {d['detailed_n']})")
-    if d["boards"]:
+    if d.get("grids"):
+        e.set_image(url=f"attachment://{DAEV_FILE}")  # a imagem dos tabuleiros é anexada pelo bot
+    elif d["boards"]:
         e.add_field(name="🧩 Tabuleiros (% de nós abertos, média)", value=_clip("\n".join(
             f"**{b['name']}** {'▰' * (b['pct'] // 10)}{'▱' * (10 - b['pct'] // 10)} {b['pct']}%" for b in d["boards"])),
             inline=False)
@@ -224,10 +241,29 @@ def player_embeds(build: dict) -> list[discord.Embed]:
         e.add_field(name="Arcanas", value=_clip(arc), inline=False)
     sk = sorted((s for s in build["skills"] if s["equip"] and s["cat"] in ("Active", "Dp")), key=lambda s: -s["lv"])
     e.add_field(name="Skills na barra", value=_clip(", ".join(f"{s['name']} {s['lv']}" for s in sk) or "-"), inline=False)
+    gems: dict[str, int] = {}
+    stones: dict[str, int] = {}
+    for g in build["gear"]:
+        for _sid, name, lv in g.get("sub_skills") or []:
+            gems[name] = gems.get(name, 0) + (lv or 1)
+        for name, _v, _gr in g.get("stones") or []:
+            stones[name] = stones.get(name, 0) + 1
+    if gems:
+        e.add_field(name="💎 Gemas de habilidade (Soul Binding)", value=_clip(", ".join(
+            f"{n} +{v}" for n, v in sorted(gems.items(), key=lambda x: -x[1]))), inline=False)
+    if stones:
+        e.add_field(name="💠 Manastones", value=_clip(", ".join(
+            f"{n} ×{c}" for n, c in sorted(stones.items(), key=lambda x: -x[1]))), inline=False)
+    theo = [x[0] for g in build["gear"] for x in g.get("god") or []]
+    if theo:
+        e.add_field(name="🔥 Theostone", value=_clip(", ".join(theo)), inline=False)
     d = build["daevanion"]
     e2 = discord.Embed(title=f"{p['characterName']} — Daevanion e títulos", color=e.color)
-    e2.add_field(name="Tabuleiros", value=_clip("\n".join(
-        f"**{b['name']}** {b['open']}/{b['total']} ({b['pct']}%)" for b in d["boards"]) or "-"), inline=False)
+    if any(b.get("nodes") for b in d["boards"]):
+        e2.set_image(url=f"attachment://{DAEV_FILE}")
+    else:
+        e2.add_field(name="Tabuleiros", value=_clip("\n".join(
+            f"**{b['name']}** {b['open']}/{b['total']} ({b['pct']}%)" for b in d["boards"]) or "-"), inline=False)
     if d["skill_fx"]:
         e2.add_field(name="Bônus de skill", value=_clip(", ".join(
             fmt_fx(n, v) for n, v in sorted(d["skill_fx"].items(), key=lambda x: -x[1]))), inline=False)

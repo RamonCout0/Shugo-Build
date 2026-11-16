@@ -1,7 +1,9 @@
 """Shugo Build — bot do Discord com o meta de builds do AION 2 (PvE/PvP), Coreia x Global, atualizado domingo de madrugada (quinzenal)."""
 from __future__ import annotations
 
+import asyncio
 import gzip
+import io
 import logging
 import os
 import shutil
@@ -15,7 +17,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
-from aion2 import render, schedule
+from aion2 import board_image, render, schedule
 from aion2.shugo import fala
 from aion2.api import ALL_REGIONS, Aion2Api, ApiError
 from aion2.collector import Collector, Settings
@@ -162,6 +164,7 @@ class SectionView(discord.ui.View):
     def __init__(self, meta: dict, owner_id: int):
         super().__init__(timeout=600)
         self.meta = meta
+        self._daev_png: bytes | None = None  # desenha uma vez e reaproveita
         for key, (label, _) in render.SECTIONS.items():
             btn = discord.ui.Button(label=label, style=discord.ButtonStyle.primary if key == "resumo"
                                     else discord.ButtonStyle.secondary, custom_id=f"sec:{key}")
@@ -174,8 +177,23 @@ class SectionView(discord.ui.View):
                 if isinstance(item, discord.ui.Button):
                     item.style = (discord.ButtonStyle.primary if item.custom_id == f"sec:{key}"
                                   else discord.ButtonStyle.secondary)
-            await inter.response.edit_message(embed=render.SECTIONS[key][1](self.meta), view=self)
+            embed = render.SECTIONS[key][1](self.meta)
+            files: list[discord.File] = []
+            if key == "daevanion" and self.meta["daevanion"].get("grids"):
+                await inter.response.defer()  # desenhar leva ~1s: evita estourar os 3s do Discord
+                if self._daev_png is None:
+                    self._daev_png = await asyncio.to_thread(board_image.meta_image, self.meta)
+                if self._daev_png:
+                    files.append(discord.File(io.BytesIO(self._daev_png), filename=render.DAEV_FILE))
+                await inter.edit_original_response(embed=embed, view=self, attachments=files)
+                return
+            await inter.response.edit_message(embed=embed, view=self, attachments=files)
         return cb
+
+
+async def player_files(build: dict) -> list[discord.File]:
+    png = await asyncio.to_thread(board_image.build_image, build)
+    return [discord.File(io.BytesIO(png), filename=render.DAEV_FILE)] if png else []
 
 
 def NO_DATA() -> str:
@@ -254,7 +272,7 @@ async def player_cmd(inter: discord.Interaction, nome: str, regiao: app_commands
     except ApiError as e:
         return await inter.followup.send(fala("erro_api", erro=str(e)[:150]))
     await inter.followup.send(fala("jogador", nome=build['profile']['characterName']),
-                              embeds=render.player_embeds(build))
+                              embeds=render.player_embeds(build), files=await player_files(build))
 
 
 abismo = app_commands.Group(name="abismo", description="Lista manual dos tops do Abismo (a NC não publica o ranking)",

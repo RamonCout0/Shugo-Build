@@ -13,7 +13,8 @@ import time
 from dataclasses import dataclass
 
 from .api import GLOBAL_REGIONS, Aion2Api, ApiError
-from .meta import aggregate, best_pvp_rank, compact_build, diff_snapshots, title_focus
+from .meta import (NO_DETAIL_SLOTS, aggregate, best_pvp_rank, compact_build, diff_snapshots, has_full_detail,
+                   title_focus)
 from .store import Store
 
 log = logging.getLogger(__name__)
@@ -119,11 +120,22 @@ class Collector:
                         details[b["id"]] = await self.api.daevanion(region, char_id, server_id, b["id"])
                     except ApiError as e:
                         log.debug("daevanion %s/%s falhou: %s", char_id, b["id"], e)
-        build = compact_build(region, info, equip, details)
+        items = {}
+        if detailed:  # gemas (Soul Binding), Manastones e Theostone: 1 requisição por item
+            for it in (equip.get("equipment") or {}).get("equipmentList") or []:
+                if it["slotPosName"] in NO_DETAIL_SLOTS:
+                    continue
+                try:
+                    items[it["slotPosName"]] = await self.api.item_detail(region, char_id, server_id, it)
+                except ApiError as e:
+                    log.debug("item %s/%s falhou: %s", char_id, it["slotPosName"], e)
+        build = compact_build(region, info, equip, details, items)
         self.store.save_build(region, char_id, build)
         return build
 
-    async def refresh_builds(self, region: str, cache: dict) -> int:
+    async def refresh_builds(self, region: str, cache: dict, only_missing_detail: bool = False) -> int:
+        """Atualiza as builds dos tops. only_missing_detail=True só completa os top N que ainda não têm
+        tabuleiro nó a nó / gemas (usado pra completar um seed antigo sem refazer tudo)."""
         cap = self.store.get(f"cap:{region}", 0)
         n = 0
         for cls in self.store.classes([region]):
@@ -135,9 +147,13 @@ class Collector:
                         wanted[r["char_id"]] = (r, detailed)
             for char_id, (r, detailed) in wanted.items():
                 old = self.store.build(region, char_id)
-                fresh = r["build_at"] and time.time() - r["build_at"] < self.s.build_max_age
-                if fresh and (not detailed or (old and old["daevanion"]["detailed"])):
-                    continue
+                if only_missing_detail:
+                    if not detailed or has_full_detail(old):
+                        continue
+                else:
+                    fresh = r["build_at"] and time.time() - r["build_at"] < self.s.build_max_age
+                    if fresh and (not detailed or has_full_detail(old)):
+                        continue
                 try:
                     await self.fetch_build(region, char_id, r["server_id"], detailed, cache)
                     n += 1
@@ -189,6 +205,14 @@ class Collector:
                     self.store.save_snapshot(scope, cls, mode, meta)
             log.info("[%s] meta publicado", scope)
         return changes
+
+    async def complete_details(self, regions: list[str]) -> None:
+        """Só baixa tabuleiros nó a nó + gemas dos top N que ainda não têm, e republica o meta."""
+        async with self.running:
+            for region in regions:
+                n = await self.refresh_builds(region, {}, only_missing_detail=True)
+                log.info("[%s] detalhes completados: %d builds", region, n)
+                self.publish([region] + (["global"] if region in GLOBAL_REGIONS else []))
 
     # ----------------------------------------------------------------- ciclo
     async def run_cycle(self, regions: list[str] | None = None) -> dict[str, list[str]]:

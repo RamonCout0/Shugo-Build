@@ -33,7 +33,7 @@ WORK_DB = SEED_DIR / "trabalho.db"      # ignorado pelo git (*.db)
 SEED_GZ = SEED_DIR / "aion2-seed.db.gz"  # este vai pro repositório
 
 
-async def main(ciclos: int, regioes: list[str], intervalo: float) -> None:
+async def main(ciclos: int, regioes: list[str], intervalo: float, completar: bool = False) -> None:
     SEED_DIR.mkdir(exist_ok=True)
     # continua de um seed anterior, se existir (o pool só cresce)
     if not WORK_DB.exists() and SEED_GZ.exists():
@@ -43,13 +43,18 @@ async def main(ciclos: int, regioes: list[str], intervalo: float) -> None:
     async with aiohttp.ClientSession(headers={"User-Agent": "Mozilla/5.0 (shugo-build-bot)",
                                               "Referer": "https://aion2.plaync.com/"}) as s:
         col = Collector(Aion2Api(s, intervalo), store, Settings())
+        if completar:
+            t0 = time.time()
+            logging.info("completando tabuleiros e gemas dos tops (sem refazer a coleta)…")
+            await col.complete_details(regioes)
+            logging.info("levou %.0f min", (time.time() - t0) / 60)
         for i in range(ciclos):
             t0 = time.time()
             logging.info("ciclo %d/%d…", i + 1, ciclos)
             await col.run_cycle(regioes)
             logging.info("ciclo %d levou %.0f min", i + 1, (time.time() - t0) / 60)
-    # o bot no Railway conta a agenda (domingo quinzenal) a partir desta coleta
-    store.set("last_full_cycle", time.time())
+            # o bot no Railway conta a agenda (domingo quinzenal) a partir desta coleta
+            store.set("last_full_cycle", time.time())
     store.db.close()
 
     db = sqlite3.connect(WORK_DB)
@@ -70,6 +75,8 @@ if __name__ == "__main__":
     ap.add_argument("--ciclos", type=int, default=1)
     ap.add_argument("--regioes", nargs="+", default=list(ALL_REGIONS), choices=list(ALL_REGIONS))
     ap.add_argument("--intervalo", type=float, default=0.35, help="segundos entre requisições")
+    ap.add_argument("--completar", action="store_true",
+                    help="só completa tabuleiros/gemas dos tops do seed atual (use com --ciclos 0)")
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, stream=sys.stdout, format="%(asctime)s %(message)s")
-    asyncio.run(main(a.ciclos, a.regioes, a.intervalo))
+    asyncio.run(main(a.ciclos, a.regioes, a.intervalo, a.completar))

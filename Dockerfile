@@ -4,6 +4,11 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
 
+# fontes das imagens do Daevanion: DejaVu (acentos) + Nanum (nomes coreanos)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends fonts-dejavu-core fonts-nanum \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install -r requirements.txt
