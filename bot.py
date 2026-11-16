@@ -1,8 +1,11 @@
-"""Shugo Build — bot do Discord com o meta de builds do AION 2 (PvE/PvP), Coreia x Global, atualizado de hora em hora."""
+"""Shugo Build — bot do Discord com o meta de builds do AION 2 (PvE/PvP), Coreia x Global, atualizado domingo de madrugada (quinzenal)."""
 from __future__ import annotations
 
+import gzip
 import logging
 import os
+import shutil
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -12,7 +15,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
-from aion2 import render
+from aion2 import render, schedule
 from aion2.shugo import fala
 from aion2.api import ALL_REGIONS, Aion2Api, ApiError
 from aion2.collector import Collector, Settings
@@ -37,11 +40,32 @@ def db_path() -> str:
             log.warning("Nenhum volume no Railway: o banco será apagado a cada deploy. Crie um volume em /data.")
         p = Path("aion2.db")
     p.parent.mkdir(parents=True, exist_ok=True)
+    restore_seed(p)
     return str(p)
+
+
+SEED_GZ = Path(__file__).resolve().parent / "seed" / "aion2-seed.db.gz"
+
+
+def restore_seed(p: Path) -> None:
+    """Se o banco está vazio (primeiro deploy / volume novo), começa do seed que vem no repositório."""
+    if not SEED_GZ.exists():
+        return
+    if p.exists():
+        try:
+            con = sqlite3.connect(p)
+            n = con.execute("SELECT COUNT(*) FROM meta_snapshots").fetchone()[0]
+            con.close()
+            if n:
+                return  # já tem dados próprios: não sobrescreve
+        except sqlite3.Error:
+            pass  # tabela ainda não existe = banco vazio
+    with gzip.open(SEED_GZ, "rb") as src, open(p, "wb") as dst:
+        shutil.copyfileobj(src, dst)
+    log.info("Nyerk! Banco pré-carregado restaurado de %s — o meta já está disponível, nyang~", SEED_GZ.name)
 
 TOKEN = os.environ.get("DISCORD_TOKEN", "")
 GUILD_ID = int(os.getenv("GUILD_ID", "0") or 0)  # opcional: sincroniza comandos na hora nesse servidor
-INTERVAL_MIN = float(os.getenv("UPDATE_MINUTES", "60"))
 REGIONS = [r.strip() for r in os.getenv("REGIONS", "kr,naw,nae,eu,la,as").split(",") if r.strip()]
 
 SCOPE_CHOICES = [app_commands.Choice(name="🇰🇷 Coreia", value="kr"),
@@ -71,7 +95,9 @@ class MetaBot(commands.Bot):
             await self.tree.sync(guild=g)
         else:
             await self.tree.sync()
-        self.update_loop.change_interval(minutes=INTERVAL_MIN)
+        last = self.collector.last_full_cycle()
+        log.info("coleta agendada: %s • próxima: %s", schedule.describe(),
+                 schedule.next_run(last).strftime("%d/%m/%Y %H:%M"))
         self.update_loop.start()
 
     async def close(self):
@@ -79,8 +105,15 @@ class MetaBot(commands.Bot):
             await self.http_session.close()
         await super().close()
 
-    @tasks.loop(minutes=60)
+    @tasks.loop(minutes=15)
     async def update_loop(self):
+        """Só confere a agenda; a coleta em si roda domingo de madrugada (quinzenal por padrão)."""
+        if self.collector.running.locked():
+            return
+        never = not self.store.has_meta()  # banco vazio e sem seed: coleta uma vez pra não ficar sem dados
+        if not never and not schedule.is_due(self.collector.last_full_cycle()):
+            return
+        log.info("Nyerk! Hora da coleta%s, nyang~", " inicial (banco vazio)" if never else " agendada")
         try:
             changes = await self.collector.run_cycle(REGIONS)
         except Exception:
@@ -94,7 +127,7 @@ class MetaBot(commands.Bot):
         await self.wait_until_ready()
 
     async def post_changes(self, changes: dict[str, list[str]]):
-        e = discord.Embed(title="🔄 Shugo Build — mudanças no meta (última hora)", color=0x5865F2)
+        e = discord.Embed(title="🔄 Shugo Build — mudanças no meta desde a última coleta", color=0x5865F2)
         for key, lines in list(changes.items())[:20]:
             scope, cls, mode = key.split("|")
             e.add_field(name=f"{render.scope_label(scope)} • {render.class_label(cls)} • {render.MODE_PT[mode]}",
@@ -292,9 +325,11 @@ async def status_cmd(inter: discord.Interaction):
         c = bot.store.count(r)
         lines.append(f"**{ALL_REGIONS[r]}** — {c['n'] or 0} no pool • {c['p'] or 0} perfis • "
                      f"{c['b'] or 0} builds • level máx {c['lv'] or '-'}")
-    last = bot.collector.last_run
-    lines.append(f"\nÚltima atualização: {f'<t:{int(last)}:R>' if last else 'ainda não terminou a primeira'}"
-                 f"{' • rodando agora' if bot.collector.running.locked() else ''}")
+    last = bot.collector.last_full_cycle()
+    nxt = schedule.next_run(last)
+    lines.append(f"\nÚltima coleta completa: {f'<t:{int(last)}:f>' if last else 'ainda nenhuma'}"
+                 f"{' • **rodando agora**' if bot.collector.running.locked() else ''}")
+    lines.append(f"Próxima: <t:{int(nxt.timestamp())}:f> (<t:{int(nxt.timestamp())}:R>) • {schedule.describe()}")
     if bot.collector.last_error:
         lines.append(f"Último erro: `{bot.collector.last_error[:200]}`")
     await inter.response.send_message("\n".join(lines), ephemeral=True)

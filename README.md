@@ -1,7 +1,7 @@
 # Shugo Build — bot de builds do AION 2 para Discord
 
 Bot do Discord que monta a **build completa de cada classe** (PvE e PvP) a partir dos tops reais,
-**atualiza de hora em hora** e **compara o meta coreano com o global**.
+**atualiza sozinho domingo de madrugada, a cada duas semanas** e **compara o meta coreano com o global**.
 
 Os dados vêm do **Character Info oficial da NC** (aion2.plaync.com), na Coreia e nas 5 regiões globais
 (NA Oeste, NA Leste, Europa, América do Sul, Ásia).
@@ -26,9 +26,9 @@ Os dados vêm do **Character Info oficial da NC** (aion2.plaync.com), na Coreia 
 | `/top classe modo [região]` | Lista os 15 melhores |
 | `/jogador nome região [servidor]` | Build de qualquer personagem, consultada na hora |
 | `/abismo adicionar/remover/lista` | (admin) Lista manual dos tops do Abismo |
-| `/canal` | (admin) Canal que recebe a cada hora as mudanças do meta |
-| `/atualizar` | (admin) Força uma coleta agora |
-| `/status` | Quantos personagens já foram analisados |
+| `/canal` | (admin) Canal que recebe as mudanças do meta depois de cada coleta |
+| `/atualizar` | (admin) Força uma coleta agora (leva uns 40 a 60 min) |
+| `/status` | Quantos personagens já foram analisados, última e próxima coleta |
 
 ## Como o "top" é escolhido
 
@@ -41,8 +41,17 @@ Os dados vêm do **Character Info oficial da NC** (aion2.plaync.com), na Coreia 
   O rodapé de cada build mostra qual critério foi usado.
 
 A API não tem "listar ranking". Por isso o bot descobre personagens varrendo a busca oficial (ordenada por level)
-com palavras-chave em rodízio. O pool cresce a cada ciclo, então **as primeiras horas têm menos dados** e o meta
-fica mais preciso com o tempo.
+com palavras-chave em rodízio. O pool cresce a cada ciclo, então o meta fica mais preciso com o tempo.
+
+## Quando ele atualiza
+
+Pra gastar pouco, a coleta roda **domingo às 04:00 (horário de Brasília), um domingo sim e outro não**.
+No resto do tempo o bot só responde comandos, e o `/jogador` continua consultando ao vivo.
+
+- A contagem das duas semanas começa na última coleta completa, inclusive a do seed. Isso fica salvo no banco, então reiniciar o bot não muda a agenda.
+- Se o bot estiver fora do ar no domingo, ele espera o domingo seguinte.
+- O `/atualizar` força uma coleta na hora e reinicia a contagem.
+- Pra mudar a agenda, use as variáveis `UPDATE_EVERY_WEEKS` (1 = todo domingo), `UPDATE_HOUR`, `UPDATE_WEEKDAY` e `UPDATE_TZ`.
 
 ## Instalação
 
@@ -58,7 +67,23 @@ fica mais preciso com o tempo.
 4. Coloque o `DISCORD_TOKEN` no `.env`. Opcional: coloque o `GUILD_ID` do seu servidor pros comandos aparecerem na hora.
 5. `python bot.py`
 
-O primeiro ciclo começa assim que o bot liga e leva uns 10 a 20 minutos para as 6 regiões. Depois roda a cada `UPDATE_MINUTES`.
+### Banco pré-carregado (o bot já liga sabendo o meta)
+
+Uma coleta completa das 6 regiões leva **uns 40 a 60 minutos**, porque o bot consulta o site da NC devagar de propósito.
+Pra ninguém esperar, o repositório traz um banco já preenchido em `seed/aion2-seed.db.gz`:
+
+- quando o bot liga com o banco vazio (primeiro deploy, volume novo), ele restaura esse arquivo e o `/build` já funciona na hora;
+- depois disso, a coleta quinzenal de domingo vai atualizando por cima, e o seed nunca sobrescreve dados que o bot já tem;
+- durante a coleta, cada região é liberada assim que termina (a Coreia sai primeiro), sem esperar as outras.
+
+Pra atualizar o seed (vale a pena quando o volume for novo ou o seed estiver muito velho):
+
+```bash
+python scripts/gerar_seed.py
+git add seed/aion2-seed.db.gz && git commit -m "Atualiza seed" && git push
+```
+
+Rodar com `--ciclos 2` deixa o pool maior e o meta mais preciso, mas demora o dobro.
 
 Para testar sem Discord: `python smoke_test.py kr naw`. Ele faz um ciclo pequeno e imprime os embeds.
 
@@ -75,13 +100,14 @@ O projeto já vem com `Dockerfile` e `railway.json`, então o Railway sabe const
 4. **Crie um volume:** clique com o botão direito no serviço → **Attach Volume**, com mount path `/data`.
    O bot detecta o volume sozinho e guarda o banco lá. **Sem o volume, todo deploy apaga o histórico e o
    bot recomeça a coleta do zero.** Se esquecer, os logs mostram um aviso.
-5. Em **Settings**, deixe **Serverless / App Sleeping desligado**. O bot precisa ficar ligado pra rodar a coleta de hora em hora.
+5. Em **Settings**, deixe **Serverless / App Sleeping desligado**. O bot precisa ficar ligado pra responder comandos e pra rodar a coleta de domingo.
 6. Pronto. Cada `git push` faz um deploy novo. Se o bot cair, o Railway reinicia sozinho (até 10 tentativas seguidas).
 
 Notas:
 - O bot não abre porta HTTP, então **não gere domínio** nem configure healthcheck.
 - Os logs ficam na aba **Deployments → View Logs**. Procure por `ciclo completo` pra saber que a coleta terminou.
-- Consumo: o bot é leve (cerca de 100 MB de RAM, CPU quase parada entre os ciclos). Cabe no plano Hobby.
+- Consumo: fora do domingo de coleta, o bot só fica conectado ao Discord (cerca de 100 MB de RAM e CPU quase zero).
+  Pode deixar com pouca CPU e uns 256 MB de RAM. Abaixo disso, o Railway pode matar o processo durante a coleta.
 
 ## Avisos
 

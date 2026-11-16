@@ -170,12 +170,33 @@ class Collector:
     def classes(self, scope: str) -> list[str]:
         return self.store.classes(scope_regions(scope))
 
+    def last_full_cycle(self) -> float | None:
+        """Quando terminou a última coleta completa (persistido no banco; o seed também traz)."""
+        return self.store.get("last_full_cycle")
+
+    def publish(self, scopes: list[str]) -> dict[str, list[str]]:
+        """Recalcula e salva o meta dos escopos. Retorna as mudanças de KR/Global."""
+        changes: dict[str, list[str]] = {}
+        for scope in scopes:
+            for cls in self.classes(scope):
+                for mode in ("pve", "pvp"):
+                    meta = self.compute_meta(scope, cls, mode)
+                    if not meta.get("n"):
+                        continue
+                    diff = diff_snapshots(self.store.last_snapshot(scope, cls, mode), meta)
+                    if diff and scope in ("kr", "global"):
+                        changes[f"{scope}|{cls}|{mode}"] = diff
+                    self.store.save_snapshot(scope, cls, mode, meta)
+            log.info("[%s] meta publicado", scope)
+        return changes
+
     # ----------------------------------------------------------------- ciclo
     async def run_cycle(self, regions: list[str] | None = None) -> dict[str, list[str]]:
         """Roda um ciclo completo. Retorna {"scope|classe|modo": [mudanças]}."""
         regions = regions or ["kr", *GLOBAL_REGIONS]
         async with self.running:
             t0 = time.time()
+            changes: dict[str, list[str]] = {}
             for region in regions:
                 cache: dict = {}
                 try:
@@ -186,18 +207,10 @@ class Collector:
                 except Exception as e:  # um erro numa região não para as outras
                     log.exception("ciclo %s falhou", region)
                     self.last_error = f"{region}: {e}"
-            changes: dict[str, list[str]] = {}
-            for scope in ["kr", "global", *GLOBAL_REGIONS]:
-                for cls in self.classes(scope):
-                    for mode in ("pve", "pvp"):
-                        meta = self.compute_meta(scope, cls, mode)
-                        if not meta.get("n"):
-                            continue
-                        old = self.store.last_snapshot(scope, cls, mode)
-                        diff = diff_snapshots(old, meta)
-                        if diff and scope in ("kr", "global"):
-                            changes[f"{scope}|{cls}|{mode}"] = diff
-                        self.store.save_snapshot(scope, cls, mode, meta)
+                # publica o meta desta região na hora, sem esperar as outras
+                scopes = [region] + (["global"] if region in GLOBAL_REGIONS else [])
+                changes.update(self.publish(scopes))  # 'global' é recalculado a cada região global
             self.last_run = time.time()
+            self.store.set("last_full_cycle", self.last_run)  # a agenda quinzenal conta a partir daqui
             log.info("ciclo completo em %.0fs", time.time() - t0)
             return changes

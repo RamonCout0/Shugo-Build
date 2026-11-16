@@ -54,7 +54,7 @@ FALAS = {
         "Nyerk? A lista do Abismo está vazia, nyang~ Usa `/abismo adicionar` pra ensinar o Shugo quem manda lá!",
     ],
     "canal_on": [
-        "Nyerk! Shugo vai gritar as mudanças do meta aqui em {canal} toda hora, nyang~",
+        "Nyerk! Shugo vai gritar as mudanças do meta aqui em {canal} depois de cada coleta de domingo, nyang~",
     ],
     "canal_off": [
         "Nyang… Shugo vai ficar quietinho agora, nyerk. Sem avisos!",

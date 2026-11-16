@@ -148,6 +148,9 @@ class Store:
         self.db.execute("DELETE FROM meta_snapshots WHERE ts<?", (time.time() - 7 * 86400,))
         self.db.commit()
 
+    def has_meta(self) -> bool:
+        return self.db.execute("SELECT 1 FROM meta_snapshots LIMIT 1").fetchone() is not None
+
     def last_snapshot(self, scope: str, cls: str, mode: str) -> dict | None:
         row = self.db.execute(
             "SELECT data FROM meta_snapshots WHERE scope=? AND class=? AND mode=? ORDER BY ts DESC LIMIT 1",
