@@ -11,9 +11,9 @@ Os dados vêm do **Character Info oficial da NC** (aion2.plaync.com), na Coreia 
 | Seção | Conteúdo |
 |---|---|
 | Resumo | Top 1 (nome, servidor, poder, item level), média do top, skills e equipamentos principais, asa |
-| Equipamento | Item mais usado em cada slot (arma, armadura, acessórios, runas, arcanas) com % de uso, encanto médio e exceed (★) |
-| Skills | Ativas na barra, skills DP e passivas, com % de uso e nível médio, e a barra do top 1 |
-| Daevanion | % de nós abertos por tabuleiro, níveis de skill e atributos ganhos (somando todos os tabuleiros), escolhas do top 1 |
+| Equipamento | Item mais usado em cada slot (arma, armadura, acessórios, runas, arcanas) com % de uso, encanto médio e exceed (★), Manastones mais usadas e Theostone |
+| Skills | Ativas na barra, Estigmas e passivas, com % de uso e nível médio, a barra do top 1 e as **gemas de habilidade** (+1 de Soul Binding nos equipamentos) |
+| Daevanion | **Imagem dos tabuleiros** (6 no global, 9 na Coreia). No meta, o brilho de cada nó é a % dos tops que abriu; no `/jogador`, aceso = aberto. Também lista os níveis de skill e atributos ganhos |
 | Stats/Títulos | Atributos base e divinos médios, títulos equipados mais comuns e seus efeitos |
 
 ## Comandos
@@ -84,6 +84,10 @@ git add seed/aion2-seed.db.gz && git commit -m "Atualiza seed" && git push
 ```
 
 Rodar com `--ciclos 2` deixa o pool maior e o meta mais preciso, mas demora o dobro.
+O `--ciclos 0 --completar` só baixa os tabuleiros nó a nó e as gemas dos top 3 que ainda não têm, sem refazer a coleta.
+
+Os detalhes de tabuleiro e equipamento custam ~35 consultas por personagem, por isso só são buscados para os
+**top 3 de cada classe/modo** (e na hora, no `/jogador`, que leva uns 15 segundos).
 
 Para testar sem Discord: `python smoke_test.py kr naw`. Ele faz um ciclo pequeno e imprime os embeds.
 
